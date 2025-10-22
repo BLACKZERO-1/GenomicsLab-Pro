@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
-# Import ALL nine logic functions from the backend file
+# Import ALL fifteen logic functions from the backend file (Module 1 Complete!)
 from backend.sequence_processing.core import (
     calculate_gc_content, 
     transcribe_dna_to_rna, 
@@ -10,7 +10,13 @@ from backend.sequence_processing.core import (
     gc_sliding_window,
     analyze_codon_usage,
     find_restriction_sites,
-    design_pcr_primers  # <-- NEW IMPORT
+    design_pcr_primers,
+    find_sequence_motifs,
+    kmer_analysis,
+    sequence_similarity_search,
+    predict_rna_structure,
+    predict_signal_peptide,
+    find_transmembrane_domains # <--- Tool 15
 ) 
 
 router = APIRouter()
@@ -72,10 +78,7 @@ async def run_reverse_complement(request: SequenceInput):
 
 # -------------------------- 5. ORF Finder Endpoint --------------------------
 class ORFResponse(BaseModel):
-    orfs_found: dict = Field(
-        example={"Frame +1": ["MSRF..."]},
-        description="Dictionary of identified peptides (strings) grouped by reading frame."
-    )
+    orfs_found: dict = Field(example={"Frame +1": ["MSRF..."]}, description="Dictionary of identified peptides (strings) grouped by reading frame.")
     total_frames_searched: int = 6
 
 @router.post("/orf_finder", response_model=ORFResponse, tags=["Sequence Analysis"])
@@ -103,23 +106,13 @@ async def run_gc_sliding_window(request: GCSlidingWindowRequest):
     seq = request.sequence.strip()
     gc_list = gc_sliding_window(seq, request.window_size, request.step_size)
     
-    return GCSlidingWindowResponse(
-        window_size=request.window_size,
-        step_size=request.step_size,
-        gc_percentages=gc_list
-    )
+    return GCSlidingWindowResponse(window_size=request.window_size, step_size=request.step_size, gc_percentages=gc_list)
 
 
 # -------------------------- 7. Codon Usage Analysis Endpoint --------------------------
 class CodonUsageResponse(BaseModel):
     total_codons: int
-    codon_usage: dict = Field(
-        example={
-            "AUG": {"count": 10, "frequency_per_1000": 30.3},
-            "UAC": {"count": 15, "frequency_per_1000": 45.45}
-        },
-        description="Usage count and frequency per 1000 for each codon found."
-    )
+    codon_usage: dict = Field(example={"AUG": {"count": 10, "frequency_per_1000": 30.3}}, description="Usage count and frequency per 1000 for each codon found.")
 
 @router.post("/codon_usage", response_model=CodonUsageResponse, tags=["Sequence Analysis"])
 async def run_codon_usage(request: SequenceInput):
@@ -130,21 +123,12 @@ async def run_codon_usage(request: SequenceInput):
     if "ERROR" in usage_data:
         return CodonUsageResponse(total_codons=0, codon_usage=usage_data)
 
-    return CodonUsageResponse(
-        total_codons=usage_data['total_codons'],
-        codon_usage=usage_data['codon_usage']
-    )
+    return CodonUsageResponse(total_codons=usage_data['total_codons'], codon_usage=usage_data['codon_usage'])
 
 # -------------------------- 8. Restriction Site Finder Endpoint --------------------------
 class RestrictionSiteResponse(BaseModel):
     enzymes_tested: list[str] = ["EcoRI", "BamHI", "HindIII", "NotI"]
-    sites_found: dict = Field(
-        example={
-            "EcoRI": [105, 520],
-            "BamHI": [350]
-        },
-        description="Dictionary mapping enzyme name to a list of 1-based cutting positions."
-    )
+    sites_found: dict = Field(example={"EcoRI": [105, 520]}, description="Dictionary mapping enzyme name to a list of 1-based cutting positions.")
 
 @router.post("/restriction_sites", response_model=RestrictionSiteResponse, tags=["Sequence Analysis"])
 async def run_restriction_finder(request: SequenceInput):
@@ -157,10 +141,7 @@ async def run_restriction_finder(request: SequenceInput):
 
     tested_enzymes = list(sites.keys())
     
-    return RestrictionSiteResponse(
-        enzymes_tested=tested_enzymes,
-        sites_found=sites
-    )
+    return RestrictionSiteResponse(enzymes_tested=tested_enzymes, sites_found=sites)
 
 # -------------------------- 9. Primer Design Endpoint --------------------------
 class PrimerDesignRequest(BaseModel):
@@ -175,18 +156,199 @@ class PrimerDesignResponse(BaseModel):
 @router.post("/primer_design", response_model=PrimerDesignResponse, tags=["Sequence Analysis"])
 async def run_primer_design(request: PrimerDesignRequest):
     """API endpoint for basic PCR Primer Design (fixed 18-mer primers)."""
-    # Note: The request uses target_sequence and desired_tm, but the logic only uses target_sequence
     result = design_pcr_primers(request.target_sequence.strip(), request.desired_tm)
     
     if "ERROR" in result:
-        return PrimerDesignResponse(
-            Summary={"ERROR": result["ERROR"]},
-            Forward_Primer={},
-            Reverse_Primer={}
-        )
+        return PrimerDesignResponse(Summary={"ERROR": result["ERROR"]}, Forward_Primer={}, Reverse_Primer={})
         
-    return PrimerDesignResponse(
-        Summary=result["Summary"],
-        Forward_Primer=result["Forward_Primer"],
-        Reverse_Primer=result["Reverse_Primer"]
+    return PrimerDesignResponse(Summary=result["Summary"], Forward_Primer=result["Forward_Primer"], Reverse_Primer=result["Reverse_Primer"])
+
+class MotifSearchRequest(BaseModel):
+    sequence: str = Field(..., description="The sequence to search within (DNA or RNA).")
+    motif_pattern: str = Field(..., description="The pattern to search for (e.g., 'ATGG' or ambiguous codes like 'WSRT').")
+    is_dna: bool = Field(True, description="Set to True if the sequence is DNA (default).")
+
+class MotifMatch(BaseModel):
+    start: int
+    end: int
+    sequence: str
+
+class MotifSearchResponse(BaseModel):
+    motif_pattern: str
+    total_matches: int
+    matches: list[MotifMatch]
+
+@router.post("/motif_search", response_model=MotifSearchResponse, tags=["Sequence Analysis"])
+async def run_motif_search(request: MotifSearchRequest):
+    """API endpoint to find sequence motifs using regex/IUPAC codes."""
+    result = find_sequence_motifs(request.sequence, request.motif_pattern, request.is_dna)
+    
+    if "ERROR" in result:
+        return MotifSearchResponse(motif_pattern=request.motif_pattern, total_matches=0, matches=[MotifMatch(start=0, end=0, sequence=result["ERROR"])])
+        
+    return MotifSearchResponse(
+        motif_pattern=result["motif_pattern"],
+        total_matches=result["total_matches"],
+        matches=result["matches"]
+    )
+
+class KmerAnalysisRequest(BaseModel):
+    sequence: str = Field(..., description="The DNA or RNA sequence to analyze.")
+    k_length: int = Field(3, ge=2, le=10, description="The length (k) of the oligomer to count (e.g., 3 for trinucleotides).")
+
+class KmerData(BaseModel):
+    count: int
+    frequency_percent: float
+
+class KmerAnalysisResponse(BaseModel):
+    k_length: int
+    total_unique_kmers: int
+    total_kmers_counted: int
+    kmer_data: dict[str, KmerData] = Field(..., description="Dictionary mapping k-mer sequence to its count and frequency.")
+
+@router.post("/kmer_analysis", response_model=KmerAnalysisResponse, tags=["Sequence Analysis"])
+async def run_kmer_analysis(request: KmerAnalysisRequest):
+    """API endpoint to perform K-mer frequency analysis."""
+    result = kmer_analysis(request.sequence.strip(), request.k_length)
+    
+    if "ERROR" in result:
+        return KmerAnalysisResponse(k_length=request.k_length, total_unique_kmers=0, total_kmers_counted=0, kmer_data={})
+        
+    return KmerAnalysisResponse(
+        k_length=result["k_length"],
+        total_unique_kmers=result["total_unique_kmers"],
+        total_kmers_counted=result["total_kmers_counted"],
+        kmer_data=result["kmer_data"]
+    )
+
+class SimilaritySearchRequest(BaseModel):
+    query_sequence: str = Field(..., description="The short sequence to search.")
+    target_sequence: str = Field(..., description="The long reference sequence to search within.")
+    alignment_type: str = Field('local', description="Type of alignment: 'local' (Smith-Waterman) or 'global' (Needleman-Wunsch).")
+
+class SimilaritySearchResponse(BaseModel):
+    aligned_query: str
+    aligned_target: str
+    score: float
+    percent_identity: float
+    alignment_type: str
+    start_target_index: int
+    end_target_index: int
+
+@router.post("/similarity_search", response_model=SimilaritySearchResponse, tags=["Sequence Analysis"])
+async def run_similarity_search(request: SimilaritySearchRequest):
+    """API endpoint for local (BLAST-like) or global sequence comparison."""
+    result = sequence_similarity_search(
+        request.query_sequence.strip(), 
+        request.target_sequence.strip(), 
+        request.alignment_type
+    )
+    
+    if "ERROR" in result:
+        return SimilaritySearchResponse(
+            aligned_query=result["ERROR"],
+            aligned_target="---",
+            score=0.0,
+            percent_identity=0.0,
+            alignment_type=request.alignment_type,
+            start_target_index=0,
+            end_target_index=0
+        )
+
+    return SimilaritySearchResponse(**result)
+
+
+class SecondaryStructureResponse(BaseModel):
+    stability_tm: float = Field(..., description="The calculated stability (Melting Temperature) of the theoretical helix (in Celsius).")
+    structure_dot_bracket: str = Field(..., description="Mock secondary structure representation (dot-bracket notation).")
+    sequence_length: int
+    note: str
+
+@router.post("/rna_structure_prediction", response_model=SecondaryStructureResponse, tags=["Sequence Analysis"])
+async def run_rna_structure_prediction(request: SequenceInput):
+    """API endpoint for RNA Secondary Structure Prediction (Simulated)."""
+    result = predict_rna_structure(request.sequence.strip())
+    
+    if "ERROR" in result:
+        return SecondaryStructureResponse(
+            stability_tm=0.0,
+            structure_dot_bracket="ERROR",
+            sequence_length=len(request.sequence.strip()),
+            note=result["ERROR"]
+        )
+
+    return SecondaryStructureResponse(**result)
+
+
+# -------------------------- 14. Signal Peptide Predictor Endpoint --------------------------
+class SignalPeptideResponse(BaseModel):
+    prediction: str = Field(..., description="Prediction status: 'Signal Peptide Detected' or 'No Signal Peptide Detected'.")
+    cleavage_site_index: int = Field(0, description="1-based index of the predicted cleavage site, or 0 if none found.")
+    signal_peptide_sequence: str = Field("", description="The N-terminal sequence identified as the signal peptide.")
+    is_hydrophobic: bool
+    avg_hydrophobicity: float
+    note: str
+
+@router.post("/signal_peptide_predictor", response_model=SignalPeptideResponse, tags=["Sequence Analysis"])
+async def run_signal_peptide_predictor(request: SequenceInput):
+    """API endpoint for Signal Peptide and Cleavage Site Prediction (Rule-based Simulation)."""
+    result = predict_signal_peptide(request.sequence.strip())
+
+    # Check for generic errors caught by the logic function
+    if "ERROR" in result:
+        return SignalPeptideResponse(
+            prediction="ERROR",
+            cleavage_site_index=0,
+            signal_peptide_sequence=result["ERROR"],
+            is_hydrophobic=False,
+            avg_hydrophobicity=0.0,
+            note="Prediction failed."
+        )
+
+    # If prediction is 'No Signal Peptide Detected', return defaults
+    if result["prediction"] == "No Signal Peptide Detected":
+        return SignalPeptideResponse(
+            prediction=result["prediction"],
+            cleavage_site_index=0,
+            signal_peptide_sequence="",
+            is_hydrophobic=False,
+            avg_hydrophobicity=0.0,
+            note=result["note"]
+        )
+    
+    # Successful detection
+    return SignalPeptideResponse(
+        prediction=result["prediction"],
+        cleavage_site_index=result["cleavage_site_index"],
+        signal_peptide_sequence=result["signal_peptide_sequence"],
+        is_hydrophobic=result["is_hydrophobic"],
+        avg_hydrophobicity=result["avg_hydrophobicity"],
+        note=result["note"]
+    )
+
+# -------------------------- 15. Transmembrane Domain Finder Endpoint --------------------------
+class TransmembraneDomain(BaseModel):
+    start: int
+    end: int
+    sequence: str
+    hydrophobicity_gravy: float
+    
+class TransmembraneDomainResponse(BaseModel):
+    total_domains_found: int
+    domains: list[TransmembraneDomain] = Field(..., description="List of predicted transmembrane domains and their properties.")
+
+@router.post("/transmembrane_domain_finder", response_model=TransmembraneDomainResponse, tags=["Sequence Analysis"])
+async def run_transmembrane_domain_finder(request: SequenceInput):
+    """API endpoint to find Transmembrane Domains (Simulated based on hydrophobicity)."""
+    result = find_transmembrane_domains(request.sequence.strip())
+    
+    if "ERROR" in result:
+        return TransmembraneDomainResponse(
+            total_domains_found=0,
+            domains=[TransmembraneDomain(start=0, end=0, sequence=result["ERROR"], hydrophobicity_gravy=0.0)]
+        )
+
+    return TransmembraneDomainResponse(
+        total_domains_found=result["total_domains_found"],
+        domains=result["domains"]
     )

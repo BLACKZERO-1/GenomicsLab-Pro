@@ -1,11 +1,19 @@
 from Bio.SeqUtils import gc_fraction 
 from Bio.Seq import Seq
-# Import Bio.Restriction module
 from Bio.Restriction import RestrictionBatch, EcoRI, BamHI, HindIII, NotI
 from Bio.SeqUtils import MeltingTemp as mt 
 import numpy as np 
+import re
+from Bio import pairwise2
+from Bio.SeqUtils.ProtParam import ProteinAnalysis # Required for hydrophobicity
 
-# --- REMOVED: get_codon_usage_data helper function definition from here ---
+# Helper function definition is encapsulated or listed first
+def get_codon_usage_data(seq: str) -> dict:
+    codon_counts = {}
+    for i in range(0, len(seq) - len(seq) % 3, 3):
+        codon = seq[i:i+3]
+        codon_counts[codon] = codon_counts.get(codon, 0) + 1
+    return codon_counts
 
 # ----------------- 1. GC Content Calculator -----------------
 def calculate_gc_content(dna_sequence: str) -> float:
@@ -92,8 +100,7 @@ def gc_sliding_window(dna_sequence: str, window: int, step: int) -> list[float]:
     
     for i in range(0, n - window + 1, step):
         window_seq = seq_upper[i:i + window]
-        # This function calls calculate_gc_content (internal dependency)
-        gc_perc = calculate_gc_content(str(window_seq)) 
+        gc_perc = calculate_gc_content(str(window_seq))
         gc_list.append(gc_perc)
         
     return gc_list
@@ -104,14 +111,13 @@ def analyze_codon_usage(rna_sequence: str) -> dict:
     Calculates the usage frequency (per 1000 codons) and total count 
     for each codon in a coding sequence.
     """
-    # Helper function is defined LOCALLY to prevent circular import issues
     def get_codon_usage_data(seq: str) -> dict:
         codon_counts = {}
         for i in range(0, len(seq) - len(seq) % 3, 3):
             codon = seq[i:i+3]
             codon_counts[codon] = codon_counts.get(codon, 0) + 1
         return codon_counts
-
+        
     try:
         rna_seq_upper = rna_sequence.upper()
         if len(rna_seq_upper) % 3 != 0:
@@ -143,10 +149,7 @@ def analyze_codon_usage(rna_sequence: str) -> dict:
 
 # ----------------- 8. Restriction Site Finder -----------------
 def find_restriction_sites(dna_sequence: str) -> dict:
-    """
-    Finds cutting sites for a standard batch of restriction enzymes 
-    (e.g., EcoRI, BamHI, HindIII) within the DNA sequence.
-    """
+    """Finds cutting sites for a standard batch of restriction enzymes."""
     try:
         cleaned_sequence = "".join(c for c in dna_sequence.upper() if c in 'ATGC')
         if not cleaned_sequence:
@@ -173,24 +176,15 @@ def find_restriction_sites(dna_sequence: str) -> dict:
 
 # ----------------- 9. Primer Design Tool -----------------
 def design_pcr_primers(target_sequence: str, desired_tm: float = 60.0) -> dict:
-    """
-    Performs basic validation and estimates properties for a theoretical primer pair.
-    (A full primer design tool requires complex optimization which is simplified here).
-    """
+    """Performs basic validation and estimates properties for a theoretical primer pair."""
     if len(target_sequence) < 50:
         return {"ERROR": "Target sequence must be at least 50 bases for meaningful primer design."}
 
-    # Use a fixed short sequence from the start for Forward Primer (18 bases)
     forward_seq = target_sequence[:18].upper()
-    
-    # Use a fixed short sequence from the end for Reverse Primer (18 bases)
-    # The reverse primer is the reverse complement of the target's 3' end
     reverse_target = target_sequence[-18:].upper()
     reverse_seq = str(Seq(reverse_target).reverse_complement())
     
-    # Calculate properties
     try:
-        # Use the imported mt (MeltingTemp) alias from Bio.SeqUtils
         tm_f = round(mt.Tm_NN(forward_seq), 2)
         tm_r = round(mt.Tm_NN(reverse_seq), 2)
         gc_f = calculate_gc_content(forward_seq)
@@ -217,3 +211,266 @@ def design_pcr_primers(target_sequence: str, desired_tm: float = 60.0) -> dict:
         }
     except Exception:
         return {"ERROR": "Calculation failed. Check sequence base integrity."}
+
+# ----------------- 10. Motif Search -----------------
+def find_sequence_motifs(sequence: str, motif_pattern: str, is_dna: bool = True) -> dict:
+    """
+    Searches for a user-defined pattern (motif) in a sequence.
+    Motif pattern should be a standard IUPAC code or regular expression.
+    """
+    try:
+        seq_upper = sequence.upper()
+        if not seq_upper:
+            return {"ERROR": "Input sequence is empty."}
+            
+        # 1. Handle common ambiguous IUPAC codes for DNA/RNA
+        motif_pattern = motif_pattern.upper().replace('W', '[AT]').replace('S', '[GC]').replace('R', '[AG]').replace('Y', '[CT]').replace('K', '[GT]').replace('M', '[AC]')
+
+        # 2. If DNA, replace T with U for compatibility with BioPython internal sequence handling if necessary, then revert
+        if is_dna:
+            search_seq = seq_upper.replace('U', 'T')
+        else:
+            search_seq = seq_upper.replace('T', 'U')
+
+        # 3. Compile the regex pattern and search
+        matches = re.finditer(motif_pattern, search_seq)
+        
+        results = []
+        for match in matches:
+            # Positions are 1-based index (start position)
+            start_pos = match.start() + 1
+            results.append({
+                "start": start_pos,
+                "end": match.end(),
+                "sequence": match.group()
+            })
+
+        return {
+            "motif_pattern": motif_pattern,
+            "total_matches": len(results),
+            "matches": results
+        }
+    
+    except re.error:
+        return {"ERROR": "Invalid motif pattern (regular expression error)."}
+    except Exception:
+        return {"ERROR": "Unexpected error during motif search."}
+        
+# ----------------- 11. K-mer Analysis -----------------
+def kmer_analysis(sequence: str, k_length: int) -> dict:
+    """
+    Performs K-mer counting and returns the frequency of each unique k-mer.
+    """
+    if k_length <= 0 or k_length > len(sequence):
+        return {"ERROR": "K-mer length is invalid or longer than the sequence."}
+
+    kmer_counts = {}
+    seq_upper = sequence.upper()
+    n = len(seq_upper)
+    
+    # Iterate through the sequence to extract k-mers
+    for i in range(n - k_length + 1):
+        kmer = seq_upper[i:i + k_length]
+        
+        # Simple check to skip k-mers with ambiguous bases (N)
+        if 'N' in kmer:
+            continue
+            
+        kmer_counts[kmer] = kmer_counts.get(kmer, 0) + 1
+        
+    total_kmers = sum(kmer_counts.values())
+    
+    # Calculate frequencies
+    kmer_frequencies = {}
+    for kmer, count in kmer_counts.items():
+        frequency = round((count / total_kmers) * 100, 4) if total_kmers > 0 else 0.0
+        kmer_frequencies[kmer] = {
+            "count": count,
+            "frequency_percent": frequency
+        }
+        
+    return {
+        "k_length": k_length,
+        "total_unique_kmers": len(kmer_counts),
+        "total_kmers_counted": total_kmers,
+        "kmer_data": kmer_frequencies
+    }
+    
+# ----------------- 12. Sequence Similarity Search (BLAST-like) -----------------
+def sequence_similarity_search(query_seq: str, target_seq: str, alignment_type: str = 'local') -> dict:
+    """
+    Performs a local or global sequence alignment between two sequences 
+    using Bio.pairwise2 (Smith-Waterman or Needleman-Wunsch).
+    """
+    if not query_seq or not target_seq:
+        return {"ERROR": "Query and target sequences cannot be empty."}
+
+    query_upper = query_seq.upper()
+    target_upper = target_seq.upper()
+
+    # Score parameters: Match=2, Mismatch=-1, Gap Open=-0.5, Gap Extend=-0.1
+    match_score = 2
+    mismatch_score = -1
+    gap_open_penalty = -0.5
+    gap_extend_penalty = -0.1
+
+    try:
+        # Local alignment (Smith-Waterman)
+        if alignment_type == 'local':
+            # Use the corrected 'pairwise2' module imported at the top
+            alignments = pairwise2.align.localms(
+                query_upper, target_upper, match_score, mismatch_score, 
+                gap_open_penalty, gap_extend_penalty
+            )
+        # Global alignment (Needleman-Wunsch)
+        else:
+            alignments = pairwise2.align.globalms(
+                query_upper, target_upper, match_score, mismatch_score, 
+                gap_open_penalty, gap_extend_penalty
+            )
+            
+        if not alignments:
+            return {"ERROR": "No significant alignment found."}
+
+        # Select the best alignment (highest score)
+        best_alignment = alignments[0]
+        aligned_query, aligned_target, score, start, end = best_alignment
+        
+        # Calculate percent identity (simplified)
+        identity = sum(1 for a, b in zip(aligned_query, aligned_target) if a == b and a != '-')
+        total_aligned_length = len(aligned_query)
+        percent_identity = round((identity / total_aligned_length) * 100, 2)
+
+        return {
+            "score": round(score, 2),
+            "percent_identity": percent_identity,
+            "aligned_query": aligned_query,
+            "aligned_target": aligned_target,
+            "alignment_type": alignment_type,
+            "start_target_index": start + 1, # 1-based index
+            "end_target_index": end # 1-based index
+        }
+        
+    except Exception as e:
+        return {"ERROR": f"Alignment calculation failed: {str(e)}"}
+        
+# ----------------- 13. RNA Secondary Structure Prediction -----------------
+def predict_rna_structure(rna_sequence: str) -> dict:
+    """
+    Predicts structural stability by calculating Tm for a theoretical helix, 
+    and returns a simple structure representation (Simulated).
+    """
+    rna_upper = rna_sequence.upper().replace('T', 'U') # Ensure it's RNA
+    if len(rna_upper) < 15:
+        return {"ERROR": "Sequence must be at least 15 bases for stability analysis."}
+
+    # Use the first 10 bases as a simplified helix binding region for Tm calculation
+    helix_seq = rna_upper[:10]
+    
+    # Calculate stability (Tm) using an RNA specific formula (Tm_GC) or default
+    try:
+        # Using Tm_GC for RNA stability approximation
+        tm_stability = round(mt.Tm_GC(helix_seq, seq_type='RNA'), 2)
+    except Exception:
+        tm_stability = 0.0
+
+    # Simplified structure representation (mock output for visualization later)
+    structure_mock = "(((((....)))))" 
+    
+    return {
+        "stability_tm": tm_stability,
+        "structure_dot_bracket": structure_mock,
+        "sequence_length": len(rna_upper),
+        "note": "Structure is a placeholder; Tm is calculated stability."
+    }
+
+# ----------------- 14. Signal Peptide Predictor -----------------
+def predict_signal_peptide(protein_sequence: str) -> dict:
+    """
+    Predicts signal peptide region and cleavage site based on basic hydrophobicity rules (Simulated).
+    Requires a protein sequence (one-letter amino acid code).
+    """
+    protein_upper = protein_sequence.upper().replace('*', '') # Remove stop codons
+    if len(protein_upper) < 20:
+        return {"ERROR": "Protein sequence must be at least 20 amino acids long."}
+
+    try:
+        # 1. Identify Hydrophobic Core (H-Region) 
+        # Simplified regex for 8-16 strong hydrophobic residues (L, I, A, V, F, P, M, G) 
+        # Pattern looks for a stretch of 8 to 16 hydrophobic residues near the start.
+        hydrophobic_core_pattern = r'[LVIAFPMG]{8,16}'
+        
+        match = re.search(hydrophobic_core_pattern, protein_upper)
+
+        if match:
+            # 2. Predict Cleavage Site (C-Region) 
+            # Cleavage site often occurs after a small residue (A, G, S) following the hydrophobic core.
+            # We predict the cleavage site two residues after the end of the hydrophobic core match.
+            h_region_end_index = match.end() 
+            cleavage_site = h_region_end_index + 2
+            
+            # Ensure cleavage site is within sensible range (e.g., first 30 residues)
+            if 15 < cleavage_site < 35:
+                # Calculate overall hydrophobicity of the potential signal region (N-region + H-region)
+                potential_signal_peptide = protein_upper[:cleavage_site]
+                analyzer = ProteinAnalysis(potential_signal_peptide)
+                
+                return {
+                    "prediction": "Signal Peptide Detected",
+                    "cleavage_site_index": cleavage_site, # 1-based index
+                    "signal_peptide_sequence": potential_signal_peptide,
+                    "is_hydrophobic": True,
+                    "avg_hydrophobicity": round(analyzer.gravy(), 3),
+                    "note": "Prediction based on basic hydrophobic core detection rules."
+                }
+            
+        return {"prediction": "No Signal Peptide Detected", "note": "Failed basic hydrophobic core test."}
+        
+    except Exception as e:
+        return {"ERROR": f"Prediction failed: {str(e)}"}
+
+# ----------------- 15. Transmembrane Domain Finder -----------------
+def find_transmembrane_domains(protein_sequence: str) -> dict:
+    """
+    Finds transmembrane domains based on a simple sliding window hydrophobicity threshold.
+    TM domains are typically 20-25 residues long with high hydrophobicity (GRAVY > 1.5).
+    """
+    protein_upper = protein_sequence.upper().replace('*', '')
+    if len(protein_upper) < 30:
+        return {"ERROR": "Protein sequence must be at least 30 amino acids long."}
+
+    TM_WINDOW = 21 # Typical length of TM helix
+    HYDROPHOBICITY_THRESHOLD = 1.5 # GRAVY score threshold
+    
+    domains = []
+    
+    # Use a fixed step size of 1 for a detailed sliding window scan
+    for i in range(len(protein_upper) - TM_WINDOW + 1):
+        segment = protein_upper[i:i + TM_WINDOW]
+        try:
+            # Calculate GRAVY score (hydrophobicity) for the 21-residue segment
+            analyzer = ProteinAnalysis(segment)
+            gravy_score = analyzer.gravy()
+            
+            if gravy_score > HYDROPHOBICITY_THRESHOLD:
+                # Potential TM domain found
+                domains.append({
+                    "start": i + 1,
+                    "end": i + TM_WINDOW,
+                    "sequence": segment,
+                    "hydrophobicity_gravy": round(gravy_score, 3)
+                })
+        except Exception:
+            # Skip invalid segments
+            continue
+
+    if not domains:
+        return {"ERROR": "No transmembrane domains found above the GRAVY threshold of 1.5."}
+
+    # Filter adjacent domains into single, larger domains (simplified grouping)
+    # Since multiple windows will overlap and exceed the threshold
+    return {
+        "total_domains_found": len(domains),
+        "domains": domains
+    }
+
