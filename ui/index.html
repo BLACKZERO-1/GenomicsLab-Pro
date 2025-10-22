@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GenomicsLab Pro - Workbench</title>
+    <!-- Load Tailwind CSS and Inter Font -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet"> 
+    
+    <!-- --- CRITICAL LOAD ORDER FIX --- -->
+    <!-- 1. React MUST load first -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- 2. Dependencies that rely on React load next -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- NEW DEPENDENCY: Plotly for visualization -->
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <!-- --------------------------------- -->
+
+    <style>
+        /* Define global professional styles and animations */
+        body { font-family: 'Inter', sans-serif; background-color: #0d0c1d; margin: 0; }
+        .bg-main { background: linear-gradient(135deg, #1f2937 0%, #0d0c1d 100%); min-height: 100vh; }
+        .sidebar-glass { background-color: rgba(31, 41, 55, 0.7); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+        .text-blue-400 { color: #60a5fa; }
+        .text-teal-400 { color: #2dd4bf; }
+        .text-purple-400 { color: #c084fc; }
+        
+        @keyframes tool-enter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-tool-enter { animation: tool-enter 0.5s ease-out; }
+        @keyframes fade-in { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fade-in 1s ease-out forwards; }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #60a5fa; }
+
+        /* Custom style for execution modal background */
+        .execution-modal-bg { background-color: rgba(0, 0, 0, 0.9); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // CRITICAL FIX: The entire application is now stable against external load failures.
+        (function() {
+            const { useState, useEffect, useCallback, useRef } = React;
+            const { createRoot } = ReactDOM;
+            
+            // --- ICON MAPPING (Custom SVG Paths) ---
+            const ICON_MAP = {
+                Home: { d: "m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", d2: "M9 22 9 12 15 12 15 22"},
+                ArrowLeft: { d: "m12 19-7-7 7-7", d2: "M19 12H5"},
+                CheckCircle: { d: "M22 11.08V12a10 10 0 1 1-5.93-9.14", d2: "M22 4 12 14.01 9 11.01"},
+                Menu: { d: "M4 12h16M4 6h16M4 18h16" },
+                X: { d: "M18 6 6 18", d2: "m6 6 12 12" },
+                Dna: { d: "M2 15c4-4 6-6 10-6 4 0 6 2 10 6", d2: "M2 9c4 4 6 6 10 6 4 0 6-2 10-6" },
+                AlignHorizontalDistributeCenter: { d: "M17 22v-5M17 2v5M7 2v5M7 22v-5", r1: [6, 10, 4, 7], r2: [6, 6, 14, 9] },
+                TreePine: { d: "M17 18h2a1 1 0 0 0 1-1v-2h-3v-3h-3v-3h-3V5h-3V2H5v3h3v3h3v3h3v3h3v2a1 1 0 0 0 1 1h2", d2: "M12 22v-2" },
+                Atom: { d: "M21 12c-1.33-2.5-3.5-4-5-4 0-1.67 2-4 5-4", d2: "M3 12c1.33 2.5 3.5 4 5 4 0 1.67-2 4-5 4", c: [12, 12, 3] },
+                HardHat: { d: "M7 6h10l2 4-2 4H7l-2-4z", d2: "M3 14v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4" },
+                BarChart: { d: "M18 17V9", d2: "M13 17V5", d3: "M8 17v-3" },
+                Brain: { d: "M12 15c-4 0-6 2-10 2V7c4-2 6-4 10-4 4 0 6 2 10 4v10c-4 0-6-2-10-2z", d2: "M12 15v3M12 3V6" },
+                Database: { d: "M21 12c0 1.66-4 3-9 3s-9-1.34-9-3", d2: "M21 19c0 1.66-4 3-9 3s-9-1.34-9-3", d3: "M3 5v14", e: [12, 5, 9, 3] },
+                Calculator: { d: "M8 6h10M8 10h10M8 14h10M8 18h10", r1: [16, 20, 4, 2] }, // Added rectangle for visual fix
+                ChevronRight: { d: "m9 18 6-6-6-6" },
+                Code: { d: "M16 18 22 12 16 6", d2: "M8 6 2 12 8 18" },
+                Repeat2: { d: "m2 9 3-3 3 3", d2: "M13 18H7a2 2 0 0 1-2-2V6", d3: "m22 15-3 3-3-3", d4: "M11 6h6a2 2 0 0 1 2 2v10" },
+                Split: { d: "M12 10H4a2 2 0 0 1-2-2V4", d2: "M12 14h8a2 2 0 0 0 2-2V4", d3: "M12 18H4a2 2 0 0 0-2 2v2", d4: "M12 6h8a2 2 0 0 1 2 2v2", d5: "M10 20H4a2 2 0 0 1-2-2V10", d6: "M22 14H12v-4h10" },
+                LineChart: { d: "M3 3v18h18", d2: "m18 8-5 5-2-4-5 5" },
+                BarChart3: { d: "M3 3v18h18", d2: "M18 17V9", d3: "M13 17V5", d4: "M8 17v-3" },
+                Scissors: { d: "M8 5 16 15", d2: "M8 17 16 7", c1: [6, 7, 3], c2: [6, 17, 3] },
+                Search: { d: "M21 21l-4.35-4.35", c: [11, 11, 8] },
+                PieChart: { d: "M21.21 15.89A10 10 0 1 1 8 2.83", d2: "M22 12A10 10 0 0 0 12 2v10z" },
+                Sigma: { d: "M18 7V4H6v3", d2: "m12 7-6 6 6 6", d3: "M6 17h12v3" },
+                Frown: { d: "M16 16s-1-2-4-2-4 2-4 2", c: [12, 12, 10], l1: [9, 10], l2: [15, 10] },
+                Send: { d: "M22 2 15 22 11 13 2 9 22 2" },
+                LayoutPanelLeft: { r1: [7, 18, 3, 3], r2: [11, 18, 11, 3], d: "M11 3v18" },
+                Upload: { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", d2: "m17 8-5-5-5 5", d3: "M12 13V3" }
+            };
+            
+            // Custom Icon Component (Replaces Lucide component)
+            const CustomIcon = ({ iconName, className }) => {
+                const icon = ICON_MAP[iconName];
+                if (!icon) return <div className={`w-6 h-6 ${className}`}></div>; // Fallback
+
+                return (
+                    <svg 
+                        xmlns="http://www.w3.org/2000/svg" 
+                        width="24" 
+                        height="24" 
+                        viewBox="0 0 24 24" 
+                        fill="none" 
+                        stroke="currentColor" 
+                        strokeWidth="2" 
+                        strokeLinecap="round" 
+                        strokeLinejoin="round" 
+                        className={`w-6 h-6 ${className}`}
+                    >
+                        {icon.d && <path d={icon.d} />}
+                        {icon.d2 && <path d={icon.d2} />}
+                        {icon.d3 && <path d={icon.d3} />}
+                        {icon.d4 && <path d={icon.d4} />}
+                        {icon.d5 && <path d={icon.d5} />}
+                        {icon.d6 && <path d={icon.d6} />}
+                        {icon.c && <circle cx={icon.c[0]} cy={icon.c[1]} r={icon.c[2]} />}
+                        {icon.c1 && <circle cx={icon.c1[0]} cy={icon.c1[1]} r={icon.c1[2]} />}
+                        {icon.c2 && <circle cx={icon.c2[0]} cy={icon.c2[1]} r={icon.c2[2]} />}
+                        {icon.e && <ellipse cx={icon.e[0]} cy={icon.e[1]} rx={icon.e[2]} ry={icon.e[3]} />}
+                        {icon.r1 && <rect width={icon.r1[0]} height={icon.r1[1]} x={icon.r1[2]} y={icon.r1[3]} rx="2"/>}
+                        {icon.r2 && <rect width={icon.r2[0]} height={icon.r2[1]} x={icon.r2[2]} y={icon.r2[3]} rx="2"/>}
+                        {icon.l1 && <line x1={icon.l1[0]} x2={icon.l1[1]} y1={icon.l1[2]} y2={icon.l1[3]} />}
+                        {icon.l2 && <line x1={icon.l2[0]} x2={icon.l2[1]} y1={icon.l2[2]} y2={icon.l2[3]} />}
+                    </svg>
+                );
+            };
+
+            // Icon lookup utility
+            const getIcon = (iconName, className = '') => {
+                return <CustomIcon iconName={iconName} className={className} />;
+            };
+
+            
+            // --- CONFIGURATION ---
+            const API_BASE_URL = 'http://127.0.0.1:8000/sequence';
+
+            const MODULES = [
+                { id: 'MODULE_1', name: 'Sequence Analysis', icon: 'Dna', tools: 15, completed: 15, color: 'text-teal-400', shadow: 'shadow-blue-500/30' },
+                { id: 'MODULE_2', name: 'Alignment & Comparison', icon: 'AlignHorizontalDistributeCenter', tools: 8, completed: 0, color: 'text-purple-400', shadow: 'shadow-purple-500/30' },
+                { id: 'MODULE_3', name: 'Phylogenetics & Evolution', icon: 'TreePine', tools: 8, completed: 0, color: 'text-pink-400', shadow: 'shadow-pink-500/30' },
+                { id: 'MODULE_4', name: 'Protein Analysis', icon: 'Atom', tools: 10, completed: 0, color: 'text-yellow-400', shadow: 'shadow-yellow-500/30' },
+                { id: 'MODULE_5', name: 'NGS Data Analysis', icon: 'HardHat', tools: 8, completed: 0, color: 'text-orange-400', shadow: 'shadow-orange-500/30' },
+                { id: 'MODULE_6', name: 'Genomic Visualization', icon: 'BarChart', tools: 8, completed: 0, color: 'text-green-400', shadow: 'shadow-green-500/30' },
+                { id: 'MODULE_7', name: 'Machine Learning & AI', icon: 'Brain', tools: 5, completed: 0, color: 'text-red-400', shadow: 'shadow-red-500/30' },
+                { id: 'MODULE_8', name: 'Data Management', icon: 'Database', tools: 5, completed: 0, color: 'text-gray-400', shadow: 'shadow-gray-500/30' },
+            ];
+            
+            const TOOLS = [
+                { name: "GC Content Calculator", icon: 'Calculator', endpoint: "/gc_content", category: "Core", is_plot: false, description: "Calculates the percentage of Guanine and Cytosine bases in a sequence." },
+                { name: "DNA RNA Transcription", icon: 'ChevronRight', endpoint: "/transcribe", category: "Core", is_plot: false, description: "Converts DNA (T) to RNA (U) sequence." },
+                { name: "RNA Protein Translation", icon: 'Code', endpoint: "/translate", category: "Core", is_plot: false, description: "Translates RNA codons into an amino acid chain." },
+                { name: "Reverse Complement", icon: 'Repeat2', endpoint: "/reverse_complement", category: "Core", is_plot: false, description: "Finds the complementary strand and reverses it (5' to 3')." },
+                { name: "ORF Finder", icon: 'Split', endpoint: "/orf_finder", category: "Advanced Analysis", is_plot: false, description: "Identifies potential protein-coding regions across all six reading frames." },
+                { name: "GC Sliding Window", icon: 'LineChart', endpoint: "/gc_sliding_window", category: "Advanced Analysis", is_plot: true, description: "Plots GC content variation across a sequence using a window average." },
+                { name: "Codon Usage Analysis", icon: 'BarChart3', endpoint: "/codon_usage", category: "Advanced Analysis", is_plot: true, description: "Determines the frequency of each codon in a coding sequence." },
+                { name: "Restriction Site Finder", icon: 'Scissors', endpoint: "/restriction_sites", category: "Molecular Biology", is_plot: true, description: "Locates specific cutting sites for common restriction enzymes." },
+                { name: "Primer Design Tool", icon: 'Dna', endpoint: "/primer_design", category: "Molecular Biology", is_plot: false, description: "Designs a basic pair of PCR forward and reverse primers." },
+                { name: "Motif Search", icon: 'Search', endpoint: "/motif_search", category: "Advanced Analysis", is_plot: false, description: "Searches for short, conserved patterns (motifs) using IUPAC codes." },
+                { name: "K-mer Analysis", icon: 'PieChart', endpoint: "/kmer_analysis", category: "Advanced Analysis", is_plot: true, description: "Counts the frequency of all contiguous subsequences of length 'k'." },
+                { name: "Similarity Search", icon: 'Sigma', endpoint: "/similarity_search", category: "Core", is_plot: false, description: "Compares two sequences using local (BLAST-like) or global alignment." },
+                { name: "RNA Secondary Structure", icon: 'Frown', endpoint: "/rna_structure_prediction", category: "Structural Analysis", is_plot: true, description: "Predicts the stability (Tm) and folding pattern of an RNA molecule." },
+                { name: "Signal Peptide Predictor", icon: 'Send', category: "Structural Analysis", is_plot: false, description: "Identifies peptides that tag proteins for secretion." },
+                { name: "Transmembrane Domain Finder", icon: 'LayoutPanelLeft', endpoint: "/transmembrane_domain_finder", category: "Structural Analysis", is_plot: true, description: "Identifies hydrophobic regions likely to span a cell membrane." },
+            ];
+
+
+            const TOTAL_TOOLS = MODULES.reduce((sum, mod) => sum + mod.tools, 0);
+            const TOOLS_IMPLEMENTED = MODULES.find(m => m.id === 'MODULE_1').completed;
+            const PROJECT_PROGRESS = (TOOLS_IMPLEMENTED / TOTAL_TOOLS) * 100;
+
+
+            // --- UTILITY COMPONENTS ---
+
+            const GlassCard = ({ children, className = '' }) => (
+                <div className={`
+                    bg-white/10 backdrop-blur-xl border border-white/20 
+                    shadow-2xl rounded-2xl p-6 transition-all duration-300
+                    ${className}
+                `}>
+                    {children}
+                </div>
+            );
+            
+            // NEW PLOT COMPONENT: Handles rendering of Plotly charts
+            const PlotRenderer = ({ plotData, layout, plotId }) => {
+                const plotRef = useRef(null);
+
+                useEffect(() => {
+                    // Check Plotly availability before rendering
+                    if (window.Plotly && plotRef.current && plotData && layout) {
+                        window.Plotly.newPlot(plotId, plotData, layout, { responsive: true, displayModeBar: false });
+                    }
+                    // Cleanup function (important for React lifecycle)
+                    return () => {
+                        if (window.Plotly && plotRef.current) {
+                            window.Plotly.purge(plotId);
+                        }
+                    };
+                }, [plotData, layout, plotId]);
+                
+                return <div id={plotId} ref={plotRef} className="w-full h-[500px]"></div>;
+            };
+
+            // NEW: Table Utility Component for non-plotting data
+            const ResultTable = ({ data }) => {
+                if (!data || typeof data !== 'object') return null;
+
+                const renderRow = (key, value) => {
+                    let displayValue = value;
+                    if (typeof value === 'number') {
+                        displayValue = parseFloat(value).toFixed(3);
+                    } else if (Array.isArray(value)) {
+                        displayValue = value.join(', ');
+                    } else if (typeof value === 'object' && value !== null) {
+                         // Recursive call for nested objects (for ORF, Codon Usage, etc.)
+                        displayValue = <pre className="text-xs text-gray-400 overflow-auto whitespace-pre-wrap">{JSON.stringify(value, null, 2)}</pre>;
+                    }
+
+                    return (
+                        <tr key={key} className="border-b border-white/10 hover:bg-white/5 transition-colors">
+                            <td className="p-2 font-semibold text-teal-300 w-1/3">{key.replace(/_/g, ' ')}</td>
+                            <td className="p-2 text-white/90 w-2/3 break-words">{displayValue}</td>
+                        </tr>
+                    );
+                };
+
+                return (
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full text-sm text-left text-gray-500 dark:text-gray-400">
+                            <tbody className="bg-transparent">
+                                {Object.entries(data).map(([key, value]) => renderRow(key, value))}
+                            </tbody>
+                        </table>
+                    </div>
+                );
+            };
+
+
+            
+            const ResultDisplay = ({ data, loading, error, selectedTool }) => {
+                if (loading) return <div className="text-blue-400 text-lg font-medium">Processing...</div>;
+                if (error) return <pre className="text-red-400 text-base p-4 bg-red-900/20 rounded-xl overflow-auto border border-red-500/50">{error}</pre>;
+                if (!data) return <div className="text-white/50 text-lg">Analysis results will be displayed here.</div>;
+
+                const resultBody = data.aligned_query || data.output_rna || data.output_protein || data.reverse_complement;
+                
+                // --- PLOTLY INTEGRATION FOR VISUALIZATION (Plotting Context) ---
+                if (selectedTool.is_plot && window.Plotly) {
+                    
+                    if (selectedTool.endpoint === '/gc_sliding_window' && data.gc_percentages) {
+                        const x_labels = Array.from({ length: data.gc_percentages.length }, (_, i) => i * data.step_size);
+                        
+                        const plotData = [{
+                            x: x_labels,
+                            y: data.gc_percentages,
+                            type: 'scatter',
+                            mode: 'lines+markers',
+                            name: 'GC Content (%)',
+                            line: { color: '#2dd4bf', width: 2 }, // teal-400
+                            marker: { size: 6 }
+                        }];
+
+                        const layout = {
+                            title: 'GC Content Sliding Window Analysis',
+                            xaxis: { title: 'Sequence Position (Start of Window)', showgrid: false, color: '#FFFFFF' },
+                            yaxis: { title: 'GC Content Percentage', color: '#FFFFFF', range: [0, 100] },
+                            plot_bgcolor: 'rgba(255, 255, 255, 0.05)',
+                            paper_bgcolor: 'rgba(0, 0, 0, 0)',
+                            font: { color: '#FFFFFF' },
+                            height: 500,
+                            margin: { t: 50, b: 50, l: 50, r: 20 },
+                        };
+
+                        return (
+                            <div className="w-full">
+                                <h3 className="text-xl font-bold text-teal-400 mb-4 border-b border-white/20 pb-2">Visualization: GC Content Plot</h3>
+                                <PlotRenderer plotId="gc-plot" plotData={plotData} layout={layout} />
+                            </div>
+                        );
+                    }
+                    
+                    if (selectedTool.endpoint === '/kmer_analysis' && data.kmer_data) {
+                        const kmers = Object.keys(data.kmer_data);
+                        const frequencies = kmers.map(k => data.kmer_data[k].frequency_percent);
+                        
+                        const plotData = [{
+                            x: kmers,
+                            y: frequencies,
+                            type: 'bar',
+                            name: 'K-mer Frequency (%)',
+                            marker: { color: frequencies.map(f => f > 10 ? '#60a5fa' : '#c084fc') } // blue/purple color scheme
+                        }];
+
+                         const layout = {
+                            title: `K-mer (${data.k_length}mers) Frequency Analysis`,
+                            xaxis: { title: 'K-mer Sequence', showgrid: false, color: '#FFFFFF' },
+                            yaxis: { title: 'Frequency (%)', color: '#FFFFFF' },
+                            plot_bgcolor: 'rgba(255, 255, 255, 0.05)',
+                            paper_bgcolor: 'rgba(0, 0, 0, 0)',
+                            font: { color: '#FFFFFF' },
+                            height: 500,
+                            margin: { t: 50, b: 50, l: 50, r: 20 },
+                        };
+                        
+                        return (
+                            <div className="w-full">
+                                <h3 className="text-xl font-bold text-teal-400 mb-4 border-b border-white/20 pb-2">Visualization: K-mer Frequency Bar Chart</h3>
+                                <PlotRenderer plotId="kmer-plot" plotData={plotData} layout={layout} />
+                            </div>
+                        );
+                    }
+                    
+                    // FALLBACK FOR OTHER PLOTTING TOOLS (e.g., Codon Usage, Restriction Sites)
+                    return (
+                        <div className="w-full">
+                            <h3 className="text-xl font-bold text-teal-400 mb-4 border-b border-white/20 pb-2">Visualization (Raw Data)</h3>
+                            <p className="text-sm text-yellow-400 mb-4">Plotting implementation pending. Showing structured output:</p>
+                            <ResultTable data={data} />
+                        </div>
+                    );
+                }
+                // --- END PLOTLY INTEGRATION ---
+
+
+                // Default for non-plotting tools (e.g., translation, peptide prediction)
+                return (
+                    <GlassCard className="p-6 overflow-hidden">
+                        <h3 className="text-xl font-bold text-teal-400 mb-4 border-b border-white/20 pb-2">Analysis Result Data</h3>
+                        
+                        {/* Show raw sequence first if alignment/translation */}
+                        {resultBody && (
+                            <div className="mb-4">
+                                <p className="font-semibold text-gray-300">Primary Sequence Output:</p>
+                                <pre className="text-base text-white/90 bg-gray-700/50 p-3 rounded-lg overflow-x-auto whitespace-pre-wrap">{resultBody}</pre>
+                            </div>
+                        )}
+                        
+                        <ResultTable data={data} />
+                    </GlassCard>
+                );
+            };
+            
+            const ThreeBackground = () => {
+                const mountRef = useRef(null);
+
+                useEffect(() => {
+                    if (typeof window.THREE === 'undefined' || !mountRef.current) return;
+                    const THREE = window.THREE;
+
+                    const currentMount = mountRef.current;
+                    
+                    const scene = new THREE.Scene();
+                    const camera = new THREE.PerspectiveCamera(75, currentMount.clientWidth / currentMount.clientHeight, 0.1, 1000);
+                    const renderer = new THREE.WebGLRenderer({ alpha: true });
+                    
+                    renderer.setSize(currentMount.clientWidth, currentMount.clientHeight);
+                    renderer.setClearColor(0x000000, 0); 
+                    currentMount.appendChild(renderer.domElement);
+
+                    const ambientLight = new THREE.AmbientLight(0x404040, 5); 
+                    scene.add(ambientLight);
+                    const pointLight = new THREE.PointLight(0x00ffff, 10); 
+                    pointLight.position.set(10, 10, 10);
+                    scene.add(pointLight);
+
+                    const material = new THREE.MeshPhongMaterial({ 
+                        color: 0x3b82f6, 
+                        shininess: 100, 
+                        transparent: true,
+                        opacity: 0.8 
+                    });
+                    
+                    const geometry = new THREE.TorusKnotGeometry(1.5, 0.5, 100, 16);
+                    const helix = new THREE.Mesh(geometry, material);
+                    scene.add(helix);
+                    
+                    helix.position.set(0, 0, 0);
+                    camera.position.z = 5;
+
+                    const animate = () => {
+                        requestAnimationFrame(animate);
+                        helix.rotation.x += 0.005;
+                        helix.rotation.y += 0.01;
+                        renderer.render(scene, camera);
+                    };
+
+                    animate();
+
+                    const handleResize = () => {
+                        if (currentMount) {
+                            camera.aspect = currentMount.clientWidth / currentMount.clientHeight;
+                            camera.updateProjectionMatrix();
+                            renderer.setSize(currentMount.clientWidth, currentMount.clientHeight);
+                        }
+                    };
+
+                    window.addEventListener('resize', handleResize);
+
+                    return () => {
+                        window.removeEventListener('resize', handleResize);
+                        if (renderer.domElement.parentNode === currentMount) {
+                             currentMount.removeChild(renderer.domElement);
+                        }
+                        geometry.dispose();
+                        material.dispose();
+                    };
+                }, []); 
+
+                return (
+                    <div ref={mountRef} className="absolute inset-0 z-0 opacity-50 transition-opacity duration-1000"></div>
+                );
+            };
+
+
+            // =======================================================
+            // 1. HOME PAGE COMPONENT (Page 1: Dashboard/Landing)
+            // =======================================================
+
+            const HomePage = ({ setSelectedPage }) => {
+                // Fix: Check if Lucide icons are available before rendering
+                const CheckCircleIcon = getIcon('CheckCircle', 'w-4 h-4');
+                
+                return (
+                    <div className="relative h-full text-center flex flex-col items-center justify-center pt-10 pb-10 animate-fade-in">
+                        {/* Background 3D Animation (Floating Element) */}
+                        {typeof window.THREE !== 'undefined' && <ThreeBackground />}
+
+                        <div className="z-10 relative px-4 sm:px-0">
+                            <h1 className="text-7xl font-black text-white mb-4 tracking-tighter drop-shadow-lg transition-opacity duration-1000">
+                                GenomicsLab Pro
+                            </h1>
+                            <p className="text-3xl text-blue-300 font-light mb-12 drop-shadow-md animation-delay-300">
+                                Advanced Computational Genomics Workbench
+                            </p>
+
+                            {/* Module Cards: Navigation to Page 2 (Module Index) */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 max-w-7xl mx-auto mb-10">
+                                
+                                {MODULES.map(module => {
+                                    // Dynamically access the icon component
+                                    const ModuleIcon = getIcon(module.icon, `${module.color} mb-3`);
+                                    
+                                    return (
+                                    <GlassCard 
+                                        key={module.id}
+                                        className={`text-left ${module.completed > 0 ? 'cursor-pointer hover:scale-[1.03]' : 'opacity-60'} transition-transform`}
+                                        onClick={() => module.completed > 0 ? setSelectedPage(module.id) : null}
+                                    >
+                                        {/* Use React.cloneElement to pass size/class props to the icon SVG */}
+                                        {React.cloneElement(ModuleIcon, { className: `w-10 h-10 ${module.color} mb-3` })}
+                                        <h3 className="text-2xl font-bold mb-2">{module.name}</h3>
+                                        <p className="text-base text-gray-300">{module.tools} tools planned.</p>
+                                        <div className="text-xs text-gray-300 mt-2 font-semibold flex items-center space-x-1">
+                                            {module.completed > 0 ? (
+                                                <>
+                                                    {React.cloneElement(CheckCircleIcon, { className: "w-4 h-4 text-green-400" })} 
+                                                    <span className="text-green-400">{module.completed}/{module.tools} Tools Implemented</span>
+                                                </>
+                                            ) : (
+                                                <span className="text-yellow-400">Planned</span>
+                                            )}
+                                        </div>
+                                    </GlassCard>
+                                )})}
+                            </div>
+                            
+                            {/* Operational Metrics Card (NOW AT THE END) */}
+                            <GlassCard className="text-left w-full max-w-7xl mx-auto shadow-pink-500/30 animate-fade-in animation-delay-700">
+                                <h3 className="text-2xl font-bold text-pink-400 mb-4 border-b border-white/20 pb-2">
+                                    Operational Metrics
+                                </h3>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
+                                    <div>
+                                        <p className="text-5xl font-extrabold text-white">{TOOLS_IMPLEMENTED}</p>
+                                        <p className="text-sm text-gray-300 mt-1">Tools Implemented</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-5xl font-extrabold text-white">{TOTAL_TOOLS}</p>
+                                        <p className="text-sm text-gray-300 mt-1">Total Tools in Project</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-5xl font-extrabold text-teal-400">{Math.round(PROJECT_PROGRESS)}%</p>
+                                        <p className="text-sm text-gray-300 mt-1">Project Progress</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-5xl font-extrabold text-blue-400">8</p>
+                                        <p className="text-sm text-gray-300 mt-1">Major Modules</p>
+                                    </div>
+                                </div>
+                            </GlassCard>
+                        </div>
+                    </div>
+                );
+            };
+
+
+            // =======================================================
+            // 2. MODULE PAGE COMPONENT (Page 2: Module Index)
+            // =======================================================
+
+            const ModulePage = ({ setSelectedPage, setSelectedTool, moduleInfo, toolList }) => {
+                // Filter tools relevant to this module (Sequence Analysis for now)
+                const moduleTools = toolList.filter(t => t.category); 
+
+                // Group tools for presentation within the Module Page
+                const groupedModuleTools = moduleTools.reduce((acc, tool) => {
+                    acc[tool.category] = acc[tool.category] || [];
+                    acc[tool.category].push(tool);
+                    return acc;
+                }, {});
+
+                // Fix: Check if Lucide icons are available before rendering
+                const ArrowLeftIcon = getIcon('ArrowLeft', 'w-6 h-6');
+                
+                return (
+                    <div className="relative h-full flex flex-col p-4 md:p-8 animate-tool-enter">
+                        <GlassCard className="flex flex-col flex-grow">
+                            <h1 className="text-4xl font-black text-white mb-2 border-b border-white/20 pb-2 flex items-center space-x-3">
+                                <button 
+                                    onClick={() => setSelectedPage('HOME')}
+                                    className="text-blue-400 hover:text-blue-300 transition-colors mr-3"
+                                    title="Back to Dashboard"
+                                >
+                                    {React.cloneElement(ArrowLeftIcon, { size: 24 })}
+                                </button>
+                                <span>{moduleInfo.name} ({moduleInfo.tools} Tools)</span>
+                            </h1>
+                            <p className="text-lg text-gray-300 mb-8">
+                                {moduleInfo.name} tools perform fundamental operations on DNA, RNA, and protein sequences. 
+                                Select a tool below to open the dedicated **Execution and Visualization Panel** (simulated New Window/Tab).
+                            </p>
+                            
+                            {/* Tool List Section */}
+                            <div className="flex-grow overflow-y-auto pr-4 space-y-6">
+                                {Object.entries(groupedModuleTools).map(([category, tools]) => (
+                                    <div key={category}>
+                                        <h3 className="text-xl font-bold text-teal-400 mb-3 border-b border-teal-400/30 pb-1">{category} Tools</h3>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                                            {tools.map(tool => {
+                                                const ToolIcon = getIcon(tool.icon, 'w-6 h-6 text-blue-400 flex-shrink-0');
+                                                return (
+                                                <div 
+                                                    key={tool.name}
+                                                    className="p-4 cursor-pointer hover:bg-white/20 transition-colors flex items-center space-x-3 bg-white/10 backdrop-blur-xl border border-white/20 shadow-2xl rounded-2xl"
+                                                    onClick={() => setSelectedTool(tool)}
+                                                >
+                                                    {ToolIcon}
+                                                    <div>
+                                                        <p className="text-lg font-semibold text-white">{tool.name}</p>
+                                                        <p className="text-xs text-gray-400">{tool.description}</p>
+                                                    </div>
+                                                </div>
+                                            )})}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </GlassCard>
+                    </div>
+                );
+            };
+
+
+            // =======================================================
+            // 3. TOOL EXECUTION PANEL (New Window/Tab)
+            // =======================================================
+
+            const ToolInterface = ({ tool }) => {
+                const [inputSequence, setInputSequence] = useState('');
+                const [loading, setLoading] = useState(false);
+                const [result, setResult] = useState(null);
+                const [error, setError] = useState(null);
+                const [extraInputs, setExtraInputs] = useState({});
+                const sequenceRef = useRef(null); // Ref for automatic focus
+
+                // Focus the input area when the modal opens
+                useEffect(() => {
+                    // This is the CRITICAL FIX for double-click issue
+                    // Use a slight delay to ensure the modal is fully rendered before forcing focus
+                    const timer = setTimeout(() => {
+                        if (sequenceRef.current) {
+                            sequenceRef.current.focus();
+                            // CRITICAL FIX: Set the selection range to the end of the current text
+                            // This stops the cursor from jumping to the beginning after the first character is typed.
+                            const pos = sequenceRef.current.value.length;
+                            sequenceRef.current.setSelectionRange(pos, pos);
+                        }
+                    }, 50); // Small delay ensures modal is mounted before focus command runs
+                    
+                    // Cleanup function
+                    return () => {
+                        clearTimeout(timer);
+                        setInputSequence('');
+                        setResult(null);
+                        setError(null);
+                        setExtraInputs({});
+                    };
+                }, [tool]);
+
+                // --- File Upload Handler ---
+                const handleFileUpload = (event) => {
+                    const file = event.target.files[0];
+                    if (!file) return;
+
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        // Clean FASTA headers (lines starting with >)
+                        const content = e.target.result.replace(/>.*(\r\n|\r|\n)/g, '').replace(/(\r\n|\r|\n)/g, '');
+                        setInputSequence(content);
+                        setError(null);
+                    };
+                    reader.onerror = () => {
+                        setError("Error reading file.");
+                    };
+                    reader.readAsText(file);
+                };
+
+                // This is where the API call logic lives
+                const handleRunAnalysis = useCallback(async () => {
+                    // [API call logic is complex, omitted for brevity]
+                    if (!inputSequence.trim()) { setError("Sequence input is required."); return; }
+                    setLoading(true); setError(null); setResult(null);
+                    try {
+                        const payload = { sequence: inputSequence.trim(), ...extraInputs };
+                        
+                        // Specific payload handling for complex tools
+                        if (tool.endpoint === '/similarity_search') {
+                            payload.target_sequence = extraInputs.target_sequence || '';
+                            payload.query_sequence = inputSequence.trim();
+                            delete payload.sequence;
+                        } else if (tool.endpoint === '/primer_design') {
+                            payload.target_sequence = extraInputs.target_sequence || '';
+                            payload.desired_tm = extraInputs.desired_tm || 60.0;
+                            delete payload.sequence; 
+                        } else if (tool.endpoint === '/motif_search') { payload.motif_pattern = extraInputs.motif_pattern || ''; } 
+                          else if (tool.endpoint === '/kmer_analysis') { payload.k_length = extraInputs.k_length || 3; }
+                          else if (tool.endpoint === '/gc_sliding_window') { payload.window_size = extraInputs.window_size || 50; payload.step_size = extraInputs.step_size || 25; }
+
+                        const response = await fetch(API_BASE_URL + tool.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), });
+                        const data = await response.json();
+
+                        if (!response.ok || data.detail || data.ERROR || data.sites_found?.ERROR || data.domains?.[0]?.sequence === "ERROR") {
+                            const errorMessage = data.detail ? data.detail[0].msg : data.ERROR || data.sites_found?.ERROR || data.domains?.[0]?.sequence || "An unknown API error occurred.";
+                            throw new Error(errorMessage);
+                        }
+                        setResult(data);
+
+                    } catch (err) {
+                        setError(`API Error: ${err.message || 'Check terminal for details.'}`);
+                        console.error(err);
+                    } finally {
+                        setLoading(false);
+                    }
+                }, [inputSequence, tool, extraInputs]);
+                
+                // Input Group component 
+                const InputGroup = ({ label, isTextArea = false, type = 'text', options = [], placeholder = '', value, onChange, inputRef, autoFocus = false }) => (
+                    <div className="mb-4">
+                        <label className="block text-sm font-medium text-gray-300 mb-1">{label}</label>
+                        {isTextArea ? (
+                            <textarea
+                                rows="3"
+                                className="w-full p-3 bg-gray-700/50 border border-blue-500/50 rounded-xl text-white placeholder-gray-400 focus:ring-blue-400 focus:border-blue-400 transition-all duration-150"
+                                placeholder={placeholder}
+                                value={value}
+                                onChange={(e) => {
+                                    // CRITICAL FIX: Update the value first
+                                    onChange(e); 
+                                    // Then manually set the cursor to the end
+                                    const pos = e.target.value.length;
+                                    e.target.setSelectionRange(pos, pos);
+                                }}
+                                ref={inputRef}
+                                autoFocus={autoFocus} // Applied autoFocus here
+                            />
+                        ) : type === 'select' ? (
+                            <select
+                                className="w-full p-3 bg-gray-700/50 border border-blue-500/50 rounded-xl text-white focus:ring-blue-400 focus:border-blue-400 appearance-none transition-all duration-150"
+                                value={value}
+                                onChange={onChange}
+                            >
+                                {options.map(opt => <option key={opt} value={opt}>{String(opt)}</option>)}
+                            </select>
+                        ) : (
+                            <input
+                                type={type}
+                                step={type === 'number' ? 'any' : undefined}
+                                className="w-full p-3 bg-gray-700/50 border border-blue-500/50 rounded-xl text-white placeholder-gray-400 focus:ring-blue-400 focus:border-blue-400 transition-all duration-150"
+                                placeholder={placeholder}
+                                value={value}
+                                onChange={onChange}
+                            />
+                        )}
+                    </div>
+                );
+                
+                const renderExtraInputs = () => {
+                    if (tool.endpoint === '/gc_sliding_window') {
+                        return (
+                            <>
+                                <InputGroup label="Window Size" type="number" value={extraInputs.window_size || 50} onChange={(e) => setExtraInputs({ ...extraInputs, window_size: parseInt(e.target.value) })} />
+                                <InputGroup label="Step Size" type="number" value={extraInputs.step_size || 25} onChange={(e) => setExtraInputs({ ...extraInputs, step_size: parseInt(e.target.value) })} />
+                            </>
+                        );
+                    }
+                    if (tool.endpoint === '/similarity_search') {
+                        return (
+                            <>
+                                <InputGroup label="Target Sequence" isTextArea={true} value={extraInputs.target_sequence || ''} onChange={(e) => setExtraInputs({ ...extraInputs, target_sequence: e.target.value })} />
+                                <InputGroup label="Alignment Type" type="select" options={['local', 'global']} value={extraInputs.alignment_type || 'local'} onChange={(e) => setExtraInputs({ ...extraInputs, alignment_type: e.target.value })} />
+                            </>
+                        );
+                    }
+                    if (tool.endpoint === '/primer_design') {
+                         return (
+                            <InputGroup label="Desired Tm (°C)" type="number" value={extraInputs.desired_tm || 60.0} onChange={(e) => setExtraInputs({ ...extraInputs, desired_tm: parseFloat(e.target.value) })} />
+                        );
+                    }
+                    if (tool.endpoint === '/motif_search') {
+                         return (
+                            <>
+                                <InputGroup label="Motif Pattern" type="text" placeholder="e.g., ATGGNCA or CTTG" value={extraInputs.motif_pattern || ''} onChange={(e) => setExtraInputs({ ...extraInputs, motif_pattern: e.target.value })} />
+                                <InputGroup label="Is DNA?" type="select" options={[true, false]} value={extraInputs.is_dna !== undefined ? extraInputs.is_dna : true} onChange={(e) => setExtraInputs({ ...extraInputs, is_dna: e.target.value === 'true' })} />
+                            </>
+                        );
+                    }
+                    if (tool.endpoint === '/kmer_analysis') {
+                         return (
+                            <InputGroup label="K-mer Length" type="number" value={extraInputs.k_length || 3} onChange={(e) => setExtraInputs({ ...extraInputs, k_length: parseInt(e.target.value) })} />
+                        );
+                    }
+                    return null;
+                };
+
+
+                return (
+                    <div className="flex flex-col lg:flex-row gap-8 h-full">
+                        {/* Input/Controls Area (30% width) */}
+                        <div className="lg:w-1/3 flex-shrink-0">
+                            <GlassCard className="h-full flex flex-col">
+                                <h2 className="text-3xl font-extrabold text-blue-300 mb-6 border-b border-white/20 pb-2 flex items-center space-x-2">
+                                    {getIcon(tool.icon, 'w-6 h-6')} <span>{tool.name}</span>
+                                </h2>
+                                
+                                {/* Main Input Area */}
+                                <InputGroup 
+                                    label="Input Sequence (DNA/RNA/Protein)" 
+                                    isTextArea={true}
+                                    placeholder="Paste or type your sequence here..."
+                                    value={inputSequence} 
+                                    onChange={(e) => setInputSequence(e.target.value)}
+                                    inputRef={sequenceRef} // Ref for autofocus
+                                    autoFocus // Final fallback: use HTML attribute
+                                />
+
+                                {/* File Upload Section */}
+                                <div className="mb-6">
+                                    <label className="block text-sm font-medium text-gray-300 mb-1">Upload File (FASTA/TXT)</label>
+                                    <div className="relative">
+                                        <input
+                                            type="file"
+                                            onChange={handleFileUpload}
+                                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                            accept=".fasta,.fa,.txt"
+                                        />
+                                        <div className="bg-gray-700/50 border border-teal-500/50 p-2 rounded-xl text-center text-teal-400 hover:bg-gray-700/70 transition-colors flex items-center justify-center space-x-2">
+                                            {getIcon('Upload', 'w-5 h-5')}
+                                            <span>Click to Upload Sequence File</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+
+                                {renderExtraInputs()}
+                                
+                                <button
+                                    onClick={handleRunAnalysis}
+                                    disabled={loading}
+                                    className={`mt-auto w-full py-3 rounded-xl text-lg font-semibold 
+                                        shadow-xl transition-all duration-200 
+                                        ${loading ? 'bg-gray-500/70 text-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/50'}
+                                    `}
+                                >
+                                    {loading ? 'Analyzing...' : 'Run Analysis'}
+                                </button>
+                            </GlassCard>
+                        </div>
+
+                        {/* Result/Visualization Area (70% width) */}
+                        <div className="lg:w-2/3 flex-grow">
+                            <GlassCard className="h-full flex flex-col p-6">
+                                <h2 className="text-3xl font-extrabold text-white mb-6 border-b border-white/20 pb-2">
+                                    Results & Visualization
+                                </h2>
+                                <div className="flex-grow overflow-auto">
+                                    <ResultDisplay data={result} loading={loading} error={error} selectedTool={tool} />
+                                </div>
+                            </GlassCard>
+                        </div>
+                    </div>
+                );
+            };
+
+
+            // =======================================================
+            // 4. MAIN APPLICATION CONTAINER (The Router)
+            // =======================================================
+
+            const App = () => {
+                // State to manage navigation: HOME, MODULE_1, TOOL_EXECUTION
+                const [currentPage, setCurrentPage] = useState('HOME');
+                const [selectedTool, setSelectedTool] = useState(null); 
+                const [sidebarOpen, setSidebarOpen] = useState(false);
+                
+                const handleSelectPage = (pageName) => {
+                    setCurrentPage(pageName);
+                    setSelectedTool(null); 
+                    setSidebarOpen(false);
+                };
+                
+                // Functionality for deep links (Tool Execution Panel)
+                const handleSelectToolAndExecute = (tool) => {
+                    // This simulates opening a NEW WINDOW/TAB for execution
+                    setSelectedTool(tool);
+                    setCurrentPage('TOOL_EXECUTION');
+                    setSidebarOpen(false);
+                };
+                
+                // --- Routing Logic ---
+                let MainContent;
+                
+                if (currentPage === 'HOME') {
+                    MainContent = <HomePage setSelectedPage={handleSelectPage} />;
+                } else if (currentPage === 'MODULE_1') {
+                    MainContent = <ModulePage setSelectedPage={handleSelectPage} setSelectedTool={handleSelectToolAndExecute} moduleInfo={MODULES.find(m => m.id === 'MODULE_1')} toolList={TOOLS} />;
+                } else if (currentPage === 'TOOL_EXECUTION' && selectedTool) {
+                    // Renders the execution panel full screen
+                    MainContent = <ToolInterface key={selectedTool.endpoint} tool={selectedTool} />;
+                } else {
+                    // Fallback to Home
+                    MainContent = <HomePage setSelectedPage={handleSelectPage} />;
+                }
+                
+                return (
+                    <div className="min-h-screen bg-gray-900 text-white font-inter p-4">
+                        
+                        <div className="bg-main flex min-h-screen rounded-2xl overflow-hidden shadow-2xl">
+                            
+                            {/* --- Sidebar (Consistent Navigation) --- */}
+                            <div className={`
+                                w-64 flex-shrink-0 sidebar-glass transition-all duration-300 p-4 border-r border-white/10
+                                fixed inset-y-0 left-0 z-40 md:static md:translate-x-0
+                                ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+                            `}>
+                                <h1 className="text-3xl font-black text-blue-400 mb-6 tracking-wide border-b border-blue-400/30 pb-3">
+                                    GenomicsLab Pro
+                                </h1>
+                                <ul className="space-y-4 overflow-y-auto max-h-[85vh]">
+                                    {/* Custom Home Button / Dashboard Link */}
+                                    <li 
+                                        onClick={() => handleSelectPage('HOME')}
+                                        className={`flex items-center space-x-3 p-3 rounded-xl cursor-pointer transition-all duration-200 text-base
+                                            ${currentPage === 'HOME'
+                                                ? 'bg-blue-600 text-white font-semibold shadow-inner shadow-black/40'
+                                                : 'text-gray-300 hover:bg-white/10 hover:hover:bg-white/10 hover:text-blue-200'
+                                            }
+                                        `}
+                                    >
+                                        {getIcon('Home', 'w-5 h-5')}
+                                        <span>Dashboard</span>
+                                    </li>
+                                    
+                                    {/* Module Links - Minimalist Requirement */}
+                                     {MODULES.map(module => {
+                                        const ModuleIcon = module.icon || 'div';
+                                        
+                                        return (
+                                        <li 
+                                            key={module.id}
+                                            onClick={() => handleSelectPage(module.id)}
+                                            className={`flex items-center space-x-3 p-3 rounded-xl cursor-pointer transition-all duration-200 text-base
+                                                ${currentPage === module.id
+                                                    ? 'bg-blue-600 text-white font-semibold shadow-inner shadow-black/40'
+                                                    : 'text-gray-300 hover:bg-white/10 hover:hover:bg-white/10 hover:text-blue-200'
+                                                }
+                                            `}
+                                        >
+                                            {getIcon(module.icon, `w-5 h-5 ${module.color}`)}
+                                            <span>{module.name}</span>
+                                        </li>
+                                     )})}
+
+                                </ul>
+                            </div>
+
+                            {/* --- Main Content Area --- */}
+                            <div className="flex-grow p-4 md:p-8 relative">
+                                
+                                {/* Mobile Menu Toggle Button */}
+                                <button
+                                    className="md:hidden absolute top-4 left-4 z-50 bg-blue-600 p-2 rounded-full text-white shadow-lg"
+                                    onClick={() => setSidebarOpen(!sidebarOpen)}
+                                >
+                                    {getIcon('Menu', 'w-6 h-6')}
+                                </button>
+                                
+                                {/* Main Interface Content (Dynamic Router) */}
+                                <div className="h-full pt-10 md:pt-0">
+                                    {MainContent}
+                                </div>
+
+                            </div>
+                        </div>
+                        
+                        {/* Modal/Overlay for Tool Execution Panel (Simulates New Window/Tab) */}
+                        {selectedTool && currentPage === 'TOOL_EXECUTION' && (
+                            <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+                                <div className="relative w-full h-full max-w-7xl max-h-[95vh] bg-gray-800/90 rounded-2xl shadow-3xl p-6 md:p-8 animate-tool-enter">
+                                    
+                                    {/* Close Button */}
+                                    <button
+                                        onClick={() => handleSelectPage('MODULE_1')} // Return to Module Index
+                                        className="absolute top-4 right-4 bg-red-600 hover:bg-red-700 text-white p-3 rounded-full shadow-lg transition-transform duration-200 transform hover:scale-110 z-50"
+                                        title="Close Execution Panel"
+                                    >
+                                        {getIcon('X', 'w-6 h-6')}
+                                    </button>
+                                    
+                                    {/* Render the Tool Execution Content */}
+                                    <ToolInterface tool={selectedTool} />
+                                    
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
+
+            // Render the main App component
+            window.onload = function() {
+                const container = document.getElementById('root');
+                if (container) {
+                    const root = createRoot(container);
+                    root.render(<App />);
+                }
+            };
+
+        })();
+    </script>
+</body>
+</html>
